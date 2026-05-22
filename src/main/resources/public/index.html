@@ -1,0 +1,437 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="UTF-8"/>
+    <title>P2P Chat</title>
+    <style>
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:"Segoe UI",sans-serif;display:flex;height:100vh;background:#f0f2f5}
+
+        /* LOGIN */
+        #login-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;justify-content:center;align-items:center;z-index:9999}
+        .login-box{background:#fff;padding:40px;border-radius:15px;text-align:center;box-shadow:0 10px 25px rgba(0,0,0,.3);min-width:320px}
+        .login-box h2{color:#0084ff;margin-bottom:8px}
+        .login-box p{color:#888;margin-bottom:20px}
+        .login-box input{width:100%;padding:12px;border-radius:25px;border:1px solid #ddd;outline:none;text-align:center;font-size:15px;margin-bottom:16px}
+        .login-box button{width:100%;padding:12px;background:#0084ff;color:#fff;border:none;border-radius:25px;cursor:pointer;font-weight:bold;font-size:15px}
+
+        /* SIDEBAR */
+        #sidebar{width:280px;background:#fff;border-right:1px solid #ddd;display:flex;flex-direction:column;flex-shrink:0}
+        #my-info{padding:16px;background:#0084ff;color:#fff;font-weight:bold;font-size:14px}
+        #sidebar-tabs{display:flex;border-bottom:1px solid #eee}
+        .tab-btn{flex:1;padding:10px;background:none;border:none;cursor:pointer;font-size:13px;color:#555;border-bottom:3px solid transparent}
+        .tab-btn.active{color:#0084ff;border-bottom-color:#0084ff;font-weight:bold}
+        #peer-list,#group-list{overflow-y:auto;flex:1}
+        .peer-item{padding:12px 16px;border-bottom:1px solid #f0f2f5;cursor:pointer;display:flex;align-items:center;gap:10px;position:relative;transition:.15s}
+        .peer-item:hover{background:#f5f7fb}
+        .peer-item.active{background:#e7f3ff}
+        .peer-avatar{width:36px;height:36px;border-radius:50%;background:#0084ff;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:15px;flex-shrink:0}
+        .peer-avatar.green{background:#42b72a}
+        .peer-avatar.purple{background:#7b2ff7}
+        .peer-name{font-size:14px;font-weight:500}
+        .peer-sub{font-size:11px;color:#888}
+        .unread-dot{position:absolute;right:14px;top:50%;transform:translateY(-50%);width:9px;height:9px;background:#ff4d4d;border-radius:50%}
+        #new-group-btn{margin:10px;padding:8px;background:#e7f3ff;color:#0084ff;border:1px dashed #0084ff;border-radius:8px;cursor:pointer;font-size:13px;font-weight:bold}
+
+        /* CREATE GROUP MODAL */
+        #group-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;justify-content:center;align-items:center}
+        #group-modal.show{display:flex}
+        .modal-box{background:#fff;border-radius:12px;padding:24px;width:340px;max-height:80vh;overflow-y:auto}
+        .modal-box h3{margin-bottom:16px;color:#333}
+        .modal-box input{width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;margin-bottom:12px;font-size:14px}
+        .check-peer{display:flex;align-items:center;gap:10px;padding:8px;border-radius:8px;cursor:pointer}
+        .check-peer:hover{background:#f5f7fb}
+        .check-peer input[type=checkbox]{width:16px;height:16px}
+        .modal-actions{display:flex;gap:8px;margin-top:16px}
+        .modal-actions button{flex:1;padding:10px;border:none;border-radius:8px;cursor:pointer;font-weight:bold}
+        .btn-create{background:#0084ff;color:#fff}
+        .btn-cancel{background:#eee;color:#555}
+
+        /* CHAT AREA */
+        #chat{flex:1;display:flex;flex-direction:column;min-width:0}
+        #chat-header{padding:14px 20px;background:#fff;border-bottom:1px solid #eee;display:flex;align-items:center;gap:12px}
+        #chat-header .header-avatar{width:38px;height:38px;border-radius:50%;background:#0084ff;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:bold}
+        #chat-header-name{font-weight:bold;font-size:15px}
+        #chat-header-sub{font-size:12px;color:#888}
+        #encryption-badge{margin-left:auto;background:#e6f4ea;color:#2d7a45;font-size:11px;padding:3px 10px;border-radius:12px;font-weight:bold}
+
+        #msgs{flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:8px;background:#f0f2f5}
+        .bubble{padding:10px 14px;border-radius:18px;max-width:65%;word-wrap:break-word;font-size:14px;line-height:1.4}
+        .mine{align-self:flex-end;background:#0084ff;color:#fff;border-bottom-right-radius:4px}
+        .theirs{align-self:flex-start;background:#fff;color:#222;border-bottom-left-radius:4px;box-shadow:0 1px 2px rgba(0,0,0,.1)}
+        .system-msg{align-self:center;background:#fff3cd;color:#856404;font-size:12px;padding:4px 12px;border-radius:10px;border:1px solid #ffeaa7}
+        .error-bubble{align-self:center;background:#fff0f0;color:#cc0000;font-size:12px;padding:4px 12px;border-radius:10px;border:1px solid #ffcccc}
+        .stored-bubble{align-self:center;background:#e8f4fd;color:#0066cc;font-size:12px;padding:4px 12px;border-radius:10px;border:1px solid #bee3f8}
+        .file-bubble{display:flex;align-items:center;gap:8px}
+        .file-icon{font-size:20px}
+
+        #input-area{padding:12px 16px;background:#fff;border-top:1px solid #eee;display:flex;align-items:center;gap:8px}
+        #msgInput{flex:1;padding:11px 16px;border-radius:25px;border:1px solid #ddd;outline:none;font-size:14px}
+        #send-btn{padding:11px 20px;background:#0084ff;color:#fff;border:none;border-radius:25px;cursor:pointer;font-weight:bold}
+        #file-btn{padding:9px 12px;background:#eee;border:none;border-radius:25px;cursor:pointer;font-size:16px}
+        #file-input{display:none}
+
+        /* EMPTY STATE */
+        #empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#aaa;gap:12px}
+        #empty-state .big-icon{font-size:60px}
+    </style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-overlay">
+    <div class="login-box">
+        <h2>P2P Chat</h2>
+        <p>Nhập tên để tham gia mạng</p>
+        <input type="text" id="usernameInput" placeholder="Tên của bạn..." maxlength="20"/>
+        <button onclick="login()">Bắt đầu →</button>
+    </div>
+</div>
+
+<!-- CREATE GROUP MODAL -->
+<div id="group-modal">
+    <div class="modal-box">
+        <h3>Tạo nhóm chat</h3>
+        <input type="text" id="group-name-input" placeholder="Tên nhóm..."/>
+        <div id="peer-checkboxes"></div>
+        <div class="modal-actions">
+            <button class="btn-cancel" onclick="closeGroupModal()">Hủy</button>
+            <button class="btn-create" onclick="createGroup()">Tạo nhóm</button>
+        </div>
+    </div>
+</div>
+
+<!-- SIDEBAR -->
+<div id="sidebar">
+    <div id="my-info">Đang kết nối...</div>
+    <div id="sidebar-tabs">
+        <button class="tab-btn active" onclick="switchTab('peers')">Liên hệ</button>
+        <button class="tab-btn" onclick="switchTab('groups')">Nhóm</button>
+    </div>
+    <div id="peer-list"></div>
+    <div id="group-list" style="display:none">
+        <button id="new-group-btn" onclick="openGroupModal()">+ Tạo nhóm mới</button>
+        <div id="group-items"></div>
+    </div>
+</div>
+
+<!-- CHAT -->
+<div id="chat">
+    <div id="empty-state">
+        <div class="big-icon">💬</div>
+        <div>Chọn một liên hệ hoặc nhóm để bắt đầu chat</div>
+    </div>
+    <div id="chat-main" style="display:none;flex:1;flex-direction:column;overflow:hidden;display:none">
+        <div id="chat-header">
+            <div class="header-avatar" id="header-avatar">?</div>
+            <div>
+                <div id="chat-header-name">-</div>
+                <div id="chat-header-sub">-</div>
+            </div>
+            <div id="encryption-badge">🔒 AES Encrypted</div>
+        </div>
+        <div id="msgs"></div>
+        <div id="input-area">
+            <input type="file" id="file-input" onchange="sendFile()"/>
+            <button id="file-btn" onclick="document.getElementById('file-input').click()">📎</button>
+            <input type="text" id="msgInput" placeholder="Nhập tin nhắn..."/>
+            <button id="send-btn" onclick="send()">Gửi</button>
+        </div>
+    </div>
+</div>
+
+<script>
+// ─── STATE ───────────────────────────────────────────────
+let myPort = 0, myName = '';
+let currentTarget = null;   // { type: 'peer'|'group'|'broadcast', addr, name, groupId, members }
+let peers = [];             // ["Name-127.0.0.1:port", ...]
+let groups = JSON.parse(localStorage.getItem('p2p_groups') || '[]');
+// chatStorage: key = addr hoặc "group:groupId", value = [{txt, mine, type}]
+let chatStorage = {};
+let unread = new Set();
+
+// ─── LOGIN ────────────────────────────────────────────────
+async function login() {
+    const name = document.getElementById('usernameInput').value.trim();
+    if (!name) return alert('Nhập tên đi!');
+    const res = await fetch(`/api/login?name=${encodeURIComponent(name)}`, { method: 'POST' });
+    if (res.ok) {
+        myName = name;
+        document.getElementById('login-overlay').style.display = 'none';
+        setInterval(refresh, 1500);
+        refresh();
+    }
+}
+
+// ─── REFRESH ──────────────────────────────────────────────
+async function refresh() {
+    try {
+        const info = await (await fetch('/api/info')).json();
+        myPort = info.port;
+        myName = info.name;
+        document.getElementById('my-info').textContent = `👤 ${info.name}  •  Port: ${info.port}`;
+
+        peers = await (await fetch('/api/peers')).json();
+        renderPeerList();
+
+        const newMsgs = await (await fetch('/api/messages')).json();
+        newMsgs.forEach(handleIncoming);
+    } catch(e) {}
+}
+
+// ─── HANDLE INCOMING MESSAGE ──────────────────────────────
+function handleIncoming(raw) {
+    if (raw.startsWith('[Private]|')) {
+        const parts = raw.split('|');
+        const senderAddr = parts[1].split('-')[1];
+        const senderName = parts[1].split('-')[0];
+        const content = parts.slice(2).join('|');
+        const key = senderAddr;
+        pushMsg(key, { txt: senderName + ': ' + content, mine: false });
+        if (!currentTarget || currentTarget.addr !== senderAddr) unread.add(key);
+    } else if (raw.startsWith('[Group]|')) {
+        const parts = raw.split('|');
+        const groupId = parts[1];
+        const senderName = parts[2].split('-')[0];
+        const content = parts.slice(3).join('|');
+        const key = 'group:' + groupId;
+        pushMsg(key, { txt: senderName + ': ' + content, mine: false });
+        if (!currentTarget || currentTarget.groupId !== groupId) unread.add(key);
+    } else if (raw.startsWith('[Broadcast]|')) {
+        const content = raw.split('|').slice(1).join('|');
+        pushMsg('broadcast', { txt: '📢 ' + content, mine: false });
+    } else if (raw.startsWith('[GROUP_INVITE]|')) {
+        // [GROUP_INVITE]|groupId|groupName|member1,member2,...|creatorName-creatorAddr
+        const parts = raw.split('|');
+        const groupId = parts[1];
+        const groupName = parts[2];
+        const members = parts[3].split(',');
+        const creatorInfo = parts[4];
+        const creatorName = creatorInfo.split('-')[0];
+        // Lưu nhóm nếu chưa có
+        if (!groups.find(g => g.id === groupId)) {
+            groups.push({ id: groupId, name: groupName, members });
+            localStorage.setItem('p2p_groups', JSON.stringify(groups));
+            renderPeerList();
+            // Thông báo popup
+            const notif = document.createElement('div');
+            notif.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#0084ff;color:#fff;padding:12px 20px;border-radius:10px;font-size:14px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.2)';
+            notif.textContent = `${creatorName} đã thêm bạn vào nhóm "${groupName}"`;
+            document.body.appendChild(notif);
+            setTimeout(() => notif.remove(), 4000);
+        }
+    } else if (raw.startsWith('[FILE_RECEIVED]|')) {
+        const parts = raw.split('|');
+        const senderAddr = parts[1];
+        const msg = parts.slice(2).join('|');
+        pushMsg(senderAddr, { txt: '📎 ' + msg, mine: false, type: 'file' });
+        if (!currentTarget || currentTarget.addr !== senderAddr) unread.add(senderAddr);
+    }
+    renderMessages();
+    renderPeerList();
+}
+
+function pushMsg(key, msg) {
+    if (!chatStorage[key]) chatStorage[key] = [];
+    chatStorage[key].push(msg);
+}
+
+// ─── RENDER PEER LIST ─────────────────────────────────────
+function renderPeerList() {
+    const list = document.getElementById('peer-list');
+    const myAddr = `127.0.0.1:${myPort}`;
+    let html = '';
+    (peers || []).forEach(p => {
+        if (!p.includes('-')) return;
+        const [name, addr] = p.split('-');
+        if (addr === myAddr) return;
+        const key = addr;
+        const isActive = currentTarget && currentTarget.addr === addr;
+        const hasUnread = unread.has(key);
+        const initial = name[0].toUpperCase();
+        html += `<div class="peer-item ${isActive ? 'active' : ''}" onclick="selectPeer('${addr}','${name}')">
+            <div class="peer-avatar">${initial}</div>
+            <div><div class="peer-name">${name}</div><div class="peer-sub">${addr}</div></div>
+            ${hasUnread ? '<div class="unread-dot"></div>' : ''}
+        </div>`;
+    });
+    list.innerHTML = html || '<div style="padding:20px;color:#aaa;text-align:center;font-size:13px">Chưa có peer online</div>';
+
+    // Render group items
+    const groupItems = document.getElementById('group-items');
+    let ghtml = '';
+    groups.forEach(g => {
+        const key = 'group:' + g.id;
+        const isActive = currentTarget && currentTarget.groupId === g.id;
+        const hasUnread = unread.has(key);
+        ghtml += `<div class="peer-item ${isActive ? 'active' : ''}" onclick="selectGroup('${g.id}','${g.name}')">
+            <div class="peer-avatar purple">${g.name[0].toUpperCase()}</div>
+            <div><div class="peer-name">${g.name}</div><div class="peer-sub">${g.members.length} thành viên</div></div>
+            ${hasUnread ? '<div class="unread-dot"></div>' : ''}
+        </div>`;
+    });
+    groupItems.innerHTML = ghtml;
+}
+
+// ─── SELECT PEER / GROUP ──────────────────────────────────
+function selectPeer(addr, name) {
+    currentTarget = { type: 'peer', addr, name };
+    unread.delete(addr);
+    showChatArea(name, addr, name[0].toUpperCase(), '#0084ff');
+    loadHistory(addr);
+    renderMessages();
+    renderPeerList();
+}
+
+function selectGroup(groupId, name) {
+    const g = groups.find(x => x.id === groupId);
+    currentTarget = { type: 'group', groupId, name, members: g ? g.members : [] };
+    unread.delete('group:' + groupId);
+    showChatArea(name, `${g ? g.members.length : 0} thành viên`, name[0].toUpperCase(), '#7b2ff7');
+    loadHistory('group:' + groupId);
+    renderMessages();
+    renderPeerList();
+}
+
+function showChatArea(title, sub, avatarChar, color) {
+    document.getElementById('empty-state').style.display = 'none';
+    const cm = document.getElementById('chat-main');
+    cm.style.display = 'flex';
+    cm.style.flexDirection = 'column';
+    document.getElementById('chat-header-name').textContent = title;
+    document.getElementById('chat-header-sub').textContent = sub;
+    const av = document.getElementById('header-avatar');
+    av.textContent = avatarChar;
+    av.style.background = color;
+}
+
+// ─── LOAD HISTORY FROM SERVER ─────────────────────────────
+async function loadHistory(key) {
+    if (chatStorage[key] && chatStorage[key].length > 0) return; // đã có rồi
+    try {
+        const hist = await (await fetch(`/api/history?key=${encodeURIComponent(key)}`)).json();
+        if (hist && hist.length > 0) {
+            chatStorage[key] = hist.map(h => ({ txt: h, mine: h.startsWith('Tôi:') }));
+            renderMessages();
+        }
+    } catch(e) {}
+}
+
+// ─── RENDER MESSAGES ──────────────────────────────────────
+function renderMessages() {
+    if (!currentTarget) return;
+    const key = currentTarget.type === 'peer' ? currentTarget.addr : 'group:' + currentTarget.groupId;
+    const msgs = chatStorage[key] || [];
+    const div = document.getElementById('msgs');
+    div.innerHTML = msgs.map(m => {
+        if (m.type === 'error') return `<div class="error-bubble">${m.txt}</div>`;
+        if (m.type === 'stored') return `<div class="stored-bubble">${m.txt}</div>`;
+        if (m.type === 'system') return `<div class="system-msg">${m.txt}</div>`;
+        if (m.type === 'file') return `<div class="bubble ${m.mine ? 'mine' : 'theirs'} file-bubble"><span class="file-icon">📎</span>${m.txt}</div>`;
+        return `<div class="bubble ${m.mine ? 'mine' : 'theirs'}">${m.txt}</div>`;
+    }).join('');
+    div.scrollTop = div.scrollHeight;
+}
+
+// ─── SEND MESSAGE ─────────────────────────────────────────
+async function send() {
+    const input = document.getElementById('msgInput');
+    const val = input.value.trim();
+    if (!val || !currentTarget) return;
+    input.value = '';
+
+    const key = currentTarget.type === 'peer' ? currentTarget.addr : 'group:' + currentTarget.groupId;
+    pushMsg(key, { txt: 'Tôi: ' + val, mine: true });
+    renderMessages();
+
+    if (currentTarget.type === 'peer') {
+        const res = await fetch(`/api/send?target=${encodeURIComponent(currentTarget.addr)}&targetName=${encodeURIComponent(currentTarget.name)}&msg=${encodeURIComponent(val)}`, { method: 'POST' });
+        if (!res.ok) {
+            const text = await res.text();
+            if (text === 'STORED') {
+                pushMsg(key, { txt: '📦 Peer offline — tin đã được lưu, sẽ giao khi họ online lại.', type: 'stored' });
+            } else {
+                pushMsg(key, { txt: '⚠️ Gửi thất bại.', type: 'error' });
+            }
+            renderMessages();
+        }
+    } else if (currentTarget.type === 'group') {
+        const membersStr = currentTarget.members.join(',');
+        await fetch(`/api/sendgroup?groupId=${encodeURIComponent(currentTarget.groupId)}&msg=${encodeURIComponent(val)}&members=${encodeURIComponent(membersStr)}`, { method: 'POST' });
+    }
+}
+
+// ─── SEND FILE ────────────────────────────────────────────
+async function sendFile() {
+    if (!currentTarget || currentTarget.type !== 'peer') {
+        alert('Chỉ gửi file trong chat riêng!'); return;
+    }
+    const fileInput = document.getElementById('file-input');
+    if (!fileInput.files[0]) return;
+    const file = fileInput.files[0];
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`/api/sendfile?target=${encodeURIComponent(currentTarget.addr)}`, { method: 'POST', body: formData });
+    const key = currentTarget.addr;
+    if (res.ok) {
+        pushMsg(key, { txt: 'Tôi đã gửi file: ' + file.name, mine: true, type: 'file' });
+    } else {
+        pushMsg(key, { txt: '⚠️ Gửi file thất bại.', type: 'error' });
+    }
+    fileInput.value = '';
+    renderMessages();
+}
+
+// ─── GROUP MODAL ──────────────────────────────────────────
+function switchTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach((b,i) => b.classList.toggle('active', (tab==='peers'&&i===0)||(tab==='groups'&&i===1)));
+    document.getElementById('peer-list').style.display = tab === 'peers' ? '' : 'none';
+    document.getElementById('group-list').style.display = tab === 'groups' ? '' : 'none';
+}
+
+function openGroupModal() {
+    const myAddr = `127.0.0.1:${myPort}`;
+    const checkboxes = document.getElementById('peer-checkboxes');
+    checkboxes.innerHTML = (peers || []).filter(p => p.includes('-') && p.split('-')[1] !== myAddr).map(p => {
+        const [name, addr] = p.split('-');
+        return `<label class="check-peer"><input type="checkbox" value="${addr}" data-name="${name}"> ${name} <span style="color:#aaa;font-size:11px">${addr}</span></label>`;
+    }).join('') || '<div style="color:#aaa;font-size:13px">Không có peer online</div>';
+    document.getElementById('group-modal').classList.add('show');
+}
+
+function closeGroupModal() { document.getElementById('group-modal').classList.remove('show'); }
+
+function createGroup() {
+    const name = document.getElementById('group-name-input').value.trim();
+    if (!name) return alert('Nhập tên nhóm!');
+    const checked = [...document.querySelectorAll('#peer-checkboxes input:checked')];
+    if (checked.length === 0) return alert('Chọn ít nhất 1 người!');
+    const members = checked.map(c => c.value);
+    const myAddr = `127.0.0.1:${myPort}`;
+    members.push(myAddr); // thêm bản thân vào nhóm
+    const group = { id: Date.now().toString(), name, members };
+
+    // Lưu nhóm cho bản thân
+    groups.push(group);
+    localStorage.setItem('p2p_groups', JSON.stringify(groups));
+
+    // Gửi invite đến các thành viên
+    const membersStr = members.join(',');
+    fetch(`/api/creategroup?groupId=${encodeURIComponent(group.id)}&groupName=${encodeURIComponent(group.name)}&members=${encodeURIComponent(membersStr)}`, { method: 'POST' });
+
+    closeGroupModal();
+    document.getElementById('group-name-input').value = '';
+    renderPeerList();
+    selectGroup(group.id, group.name);
+}
+
+// ─── KEYBOARD ─────────────────────────────────────────────
+document.addEventListener('keypress', e => {
+    if (e.key !== 'Enter') return;
+    const overlay = document.getElementById('login-overlay');
+    if (overlay.style.display !== 'none') login();
+    else send();
+});
+</script>
+</body>
+</html>

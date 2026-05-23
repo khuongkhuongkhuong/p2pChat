@@ -1,125 +1,127 @@
 package com.p2pchat.node;
 
+import com.p2pchat.auth.ChatHistoryStore;
 import javax.crypto.*;
 import javax.crypto.spec.*;
 import java.io.*;
 import java.net.*;
-import java.nio.file.*;
 import java.security.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.Base64;
 
 public class P2PNode {
-    private String username;
+    private final String username;
     private int myPort;
-    private List<String> onlinePeers = new CopyOnWriteArrayList<>();
-    private List<String> messageQueue = new CopyOnWriteArrayList<>();
+    private final String myIp;
+    private final String bootstrapHost;
 
-    // Lịch sử chat: key = "addr" hoặc "groupId", value = danh sách tin
+    private List<String> onlinePeers  = new CopyOnWriteArrayList<>();
+    private List<String> messageQueue = new CopyOnWriteArrayList<>();
     private Map<String, List<String>> chatHistory = new ConcurrentHashMap<>();
 
-    // AES key dùng chung (trong thực tế sẽ trao đổi qua RSA)
-    private static final String AES_KEY = "P2PChatSecretKey"; // 16 bytes = 128-bit AES
+    // File nhận được lưu trong RAM: fileId → data / fileName
+    private final Map<String, byte[]>  receivedFiles     = new ConcurrentHashMap<>();
+    private final Map<String, String>  receivedFileNames = new ConcurrentHashMap<>();
 
-    public P2PNode(String username) {
-        this.username = username;
+    private static final String AES_KEY = "P2PChatSecretKey"; // 16 bytes = AES-128
+
+    // ── Constructor duy nhất ─────────────────────────────────────────────────
+    public P2PNode(String username, String bootstrapHost) {
+        this.username      = username;
+        this.bootstrapHost = bootstrapHost;
+        this.myIp          = detectLocalIp();
+        System.out.println(">>> IP của máy này: " + myIp);
     }
 
-    // ===================== AES ENCRYPTION =====================
-    private String encrypt(String plainText) {
-        try {
-            SecretKeySpec key = new SecretKeySpec(AES_KEY.getBytes(), "AES");
-            Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
-            cipher.init(Cipher.ENCRYPT_MODE, key);
-            byte[] encrypted = cipher.doFinal(plainText.getBytes("UTF-8"));
-            return Base64.getEncoder().encodeToString(encrypted);
+    // ── Tự phát hiện IP thật (không phải 127.0.0.1) ─────────────────────────
+    private static String detectLocalIp() {
+        try (Socket s = new Socket()) {
+            s.connect(new InetSocketAddress("8.8.8.8", 80), 1000);
+            return s.getLocalAddress().getHostAddress();
         } catch (Exception e) {
-            return plainText; // fallback không mã hóa
+            try { return InetAddress.getLocalHost().getHostAddress(); }
+            catch (Exception ex) { return "127.0.0.1"; }
         }
     }
 
-    private String decrypt(String cipherText) {
+    // ── Địa chỉ đầy đủ ip:port ──────────────────────────────────────────────
+    public String getMyAddr() { return myIp + ":" + myPort; }
+
+    // ===================== AES =====================
+    private String encrypt(String plain) {
         try {
-            SecretKeySpec key = new SecretKeySpec(AES_KEY.getBytes(), "AES");
-            Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
-            cipher.init(Cipher.DECRYPT_MODE, key);
-            byte[] decoded = Base64.getDecoder().decode(cipherText);
-            return new String(cipher.doFinal(decoded), "UTF-8");
-        } catch (Exception e) {
-            return cipherText; // fallback nếu không giải mã được
-        }
+            Cipher c = Cipher.getInstance("AES/ECB/PKCS5Padding");
+            c.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(AES_KEY.getBytes(), "AES"));
+            return Base64.getEncoder().encodeToString(c.doFinal(plain.getBytes("UTF-8")));
+        } catch (Exception e) { return plain; }
+    }
+
+    private String decrypt(String cipher) {
+        try {
+            Cipher c = Cipher.getInstance("AES/ECB/PKCS5Padding");
+            c.init(Cipher.DECRYPT_MODE, new SecretKeySpec(AES_KEY.getBytes(), "AES"));
+            return new String(c.doFinal(Base64.getDecoder().decode(cipher)), "UTF-8");
+        } catch (Exception e) { return cipher; }
     }
 
     // ===================== LISTENING =====================
     public void startListening() {
         new Thread(() -> {
             try (ServerSocket ss = new ServerSocket(0)) {
-                this.myPort = ss.getLocalPort();
+                myPort = ss.getLocalPort();
+                System.out.println(">>> Đang lắng nghe tại " + getMyAddr());
                 while (true) {
                     try (Socket s = ss.accept();
-                         BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream()))) {
+                         BufferedReader in = new BufferedReader(
+                                 new InputStreamReader(s.getInputStream(), "UTF-8"))) {
                         String raw = in.readLine();
                         if (raw == null) continue;
-
-                        // Xử lý file transfer (binary qua base64)
                         if (raw.startsWith("[FILE]|")) {
                             handleIncomingFile(raw);
                         } else {
-                            // Giải mã tin nhắn
                             String msg = decryptMessage(raw);
                             messageQueue.add(msg);
                             saveToHistory(msg);
                         }
-                    } catch (Exception e) { System.err.println("Lỗi nhận tin: " + e.getMessage()); }
+                    } catch (Exception e) {
+                        System.err.println("Lỗi nhận tin: " + e.getMessage());
+                    }
                 }
             } catch (IOException e) { e.printStackTrace(); }
-        }).start();
+        }, "p2p-listener").start();
     }
 
-    // Giải mã phần nội dung tin nhắn, giữ nguyên format header
     private String decryptMessage(String raw) {
         try {
-            // GROUP_INVITE không mã hóa, giữ nguyên
-            if (raw.startsWith("[GROUP_INVITE]|")) return raw;
+            if (raw.startsWith("[GROUP_INVITE]|") || raw.startsWith("[GROUP_DELETE]|")) return raw;
             if (raw.startsWith("[Private]|")) {
-                // [Private]|sender-addr|ENCRYPTED_CONTENT
-                String[] parts = raw.split("\\|", 3);
-                if (parts.length == 3) {
-                    String decrypted = decrypt(parts[2]);
-                    return parts[0] + "|" + parts[1] + "|" + decrypted;
-                }
-            } else if (raw.startsWith("[Group]|")) {
-                // [Group]|groupId|sender-addr|ENCRYPTED_CONTENT
-                String[] parts = raw.split("\\|", 4);
-                if (parts.length == 4) {
-                    String decrypted = decrypt(parts[3]);
-                    return parts[0] + "|" + parts[1] + "|" + parts[2] + "|" + decrypted;
-                }
-            } else if (raw.startsWith("[Broadcast]|")) {
-                String[] parts = raw.split("\\|", 2);
-                if (parts.length == 2) {
-                    return parts[0] + "|" + decrypt(parts[1]);
-                }
+                String[] p = raw.split("\\|", 3);
+                return p.length == 3 ? p[0] + "|" + p[1] + "|" + decrypt(p[2]) : raw;
             }
-        } catch (Exception e) { /* giữ nguyên nếu lỗi */ }
+            if (raw.startsWith("[Group]|")) {
+                String[] p = raw.split("\\|", 4);
+                return p.length == 4 ? p[0] + "|" + p[1] + "|" + p[2] + "|" + decrypt(p[3]) : raw;
+            }
+            if (raw.startsWith("[Broadcast]|")) {
+                String[] p = raw.split("\\|", 2);
+                return p.length == 2 ? p[0] + "|" + decrypt(p[1]) : raw;
+            }
+        } catch (Exception ignored) {}
         return raw;
     }
 
     // ===================== SEND DIRECT =====================
     public boolean sendDirect(String targetAddr, String targetName, String msg) {
-        String content = username + ": " + msg;
-        String encrypted = encrypt(content);
-        String formatted = "[Private]|" + username + "-127.0.0.1:" + myPort + "|" + encrypted;
-
-        String[] parts = targetAddr.split(":");
+        String formatted = "[Private]|" + username + "-" + getMyAddr() + "|" + encrypt(msg);
+        String[] parts   = targetAddr.split(":");
         try (Socket s = new Socket()) {
             s.connect(new InetSocketAddress(parts[0], Integer.parseInt(parts[1])), 2000);
-            PrintWriter out = new PrintWriter(s.getOutputStream(), true);
-            out.println(formatted);
-            // Lưu lịch sử phía người gửi
-            chatHistory.computeIfAbsent(targetAddr, k -> new CopyOnWriteArrayList<>())
-                .add("Tôi: " + msg);
+            new PrintWriter(s.getOutputStream(), true).println(formatted);
+            String histKey = "peer:" + targetName;
+            String record  = "ME|" + msg;
+            chatHistory.computeIfAbsent(histKey, k -> new CopyOnWriteArrayList<>()).add(record);
+            ChatHistoryStore.append(username, histKey, record);
             return true;
         } catch (Exception e) {
             System.err.println(">>> Peer " + targetAddr + " không phản hồi.");
@@ -129,151 +131,154 @@ public class P2PNode {
 
     // ===================== STORE-AND-FORWARD =====================
     public boolean storeForward(String targetName, String msg) {
-        String content = username + ": " + msg;
-        String encrypted = encrypt(content);
-        String storeMsg = "[Private]|" + username + "-127.0.0.1:" + myPort + "|" + encrypted;
-
-        try (Socket s = new Socket("localhost", 8888);
+        String storeMsg = "[Private]|" + username + "-" + getMyAddr() + "|" + encrypt(msg);
+        try (Socket s   = new Socket(bootstrapHost, 8888);
              PrintWriter out = new PrintWriter(s.getOutputStream(), true);
              BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream()))) {
             out.println("STORE|" + targetName + "|" + storeMsg);
-            String res = in.readLine();
-            return "STORED".equals(res);
-        } catch (Exception e) {
-            return false;
-        }
+            return "STORED".equals(in.readLine());
+        } catch (Exception e) { return false; }
     }
 
     // ===================== GROUP INVITE =====================
-    // Gửi thông báo tạo nhóm đến tất cả thành viên
-    // Format: [GROUP_INVITE]|groupId|groupName|member1addr,member2addr,...
     public void sendGroupInvite(String groupId, String groupName, List<String> memberAddrs) {
-        String myAddr = "127.0.0.1:" + myPort;
-        String membersStr = String.join(",", memberAddrs);
-        String formatted = "[GROUP_INVITE]|" + groupId + "|" + groupName + "|" + membersStr + "|" + username + "-" + myAddr;
-
-        for (String addr : memberAddrs) {
-            if (addr.equals(myAddr)) continue;
-            String[] parts = addr.split(":");
-            try (Socket s = new Socket()) {
-                s.connect(new InetSocketAddress(parts[0], Integer.parseInt(parts[1])), 2000);
-                PrintWriter out = new PrintWriter(s.getOutputStream(), true);
-                out.println(formatted);
-            } catch (Exception e) {
-                System.err.println(">>> Không gửi invite đến: " + addr);
-            }
-        }
+        String formatted = "[GROUP_INVITE]|" + groupId + "|" + groupName + "|"
+                + String.join(",", memberAddrs) + "|" + username + "-" + getMyAddr();
+        sendToAddrs(memberAddrs, formatted);
     }
 
-    // ===================== GROUP CHAT (chọn nhiều người) =====================
+    // ===================== GROUP DELETE =====================
+    public void sendGroupDelete(String groupId, String groupName, List<String> memberAddrs) {
+        String formatted = "[GROUP_DELETE]|" + groupId + "|" + groupName + "|"
+                + username + "-" + getMyAddr();
+        sendToAddrs(memberAddrs, formatted);
+    }
+
+    // ===================== GROUP CHAT =====================
     public void sendGroupSelected(String groupId, List<String> memberAddrs, String msg) {
-        String content = username + ": " + msg;
-        String encrypted = encrypt(content);
-        String formatted = "[Group]|" + groupId + "|" + username + "-127.0.0.1:" + myPort + "|" + encrypted;
+        String formatted = "[Group]|" + groupId + "|" + username + "-" + getMyAddr()
+                + "|" + encrypt(username + ": " + msg);
+        String histKey = "group:" + groupId;
+        String record  = "ME|" + msg;
+        chatHistory.computeIfAbsent(histKey, k -> new CopyOnWriteArrayList<>()).add(record);
+        ChatHistoryStore.append(username, histKey, record);
+        sendToAddrs(memberAddrs, formatted);
+    }
 
-        // Lưu lịch sử nhóm
-        chatHistory.computeIfAbsent("group:" + groupId, k -> new CopyOnWriteArrayList<>())
-            .add("Tôi: " + msg);
+    // ===================== BROADCAST =====================
+    public void sendBroadcast(String msg) {
+        String formatted = "[Broadcast]|" + encrypt(username + ": " + msg);
+        List<String> addrs = new ArrayList<>();
+        for (String peer : onlinePeers) {
+            if (peer.contains("-")) addrs.add(peer.substring(peer.lastIndexOf('-') + 1));
+        }
+        sendToAddrs(addrs, formatted);
+    }
 
-        String myAddr = "127.0.0.1:" + myPort;
-        for (String addr : memberAddrs) {
+    // ── Gửi 1 message đến danh sách địa chỉ (bỏ qua addr của bản thân) ──────
+    private void sendToAddrs(List<String> addrs, String formatted) {
+        String myAddr = getMyAddr();
+        for (String addr : addrs) {
             if (addr.equals(myAddr)) continue;
-            String[] parts = addr.split(":");
+            String[] p = addr.split(":");
             try (Socket s = new Socket()) {
-                s.connect(new InetSocketAddress(parts[0], Integer.parseInt(parts[1])), 2000);
-                PrintWriter out = new PrintWriter(s.getOutputStream(), true);
-                out.println(formatted);
+                s.connect(new InetSocketAddress(p[0], Integer.parseInt(p[1])), 2000);
+                new PrintWriter(s.getOutputStream(), true).println(formatted);
             } catch (Exception e) {
                 System.err.println(">>> Không gửi được đến: " + addr);
             }
         }
     }
 
-    // ===================== BROADCAST (toàn mạng) =====================
-    public void sendBroadcast(String msg) {
-        String encrypted = encrypt(username + ": " + msg);
-        String formatted = "[Broadcast]|" + encrypted;
-        String myAddr = "127.0.0.1:" + myPort;
-        for (String peer : onlinePeers) {
-            if (!peer.contains("-")) continue;
-            String addr = peer.split("-")[1];
-            if (addr.equals(myAddr)) continue;
-            try (Socket s = new Socket()) {
-                s.connect(new InetSocketAddress(addr.split(":")[0], Integer.parseInt(addr.split(":")[1])), 2000);
-                PrintWriter out = new PrintWriter(s.getOutputStream(), true);
-                out.println(formatted);
-            } catch (Exception e) { }
-        }
-    }
-
     // ===================== FILE TRANSFER =====================
     public boolean sendFile(String targetAddr, String fileName, byte[] fileData) {
-        String encoded = Base64.getEncoder().encodeToString(fileData);
-        String formatted = "[FILE]|" + username + "-127.0.0.1:" + myPort + "|" + fileName + "|" + encoded;
+        String formatted = "[FILE]|" + username + "-" + getMyAddr() + "|"
+                + fileName + "|" + Base64.getEncoder().encodeToString(fileData);
         String[] parts = targetAddr.split(":");
         try (Socket s = new Socket()) {
             s.connect(new InetSocketAddress(parts[0], Integer.parseInt(parts[1])), 5000);
-            PrintWriter out = new PrintWriter(s.getOutputStream(), true);
-            out.println(formatted);
-            // Thêm thông báo vào history
-            chatHistory.computeIfAbsent(targetAddr, k -> new CopyOnWriteArrayList<>())
-                .add("Tôi đã gửi file: " + fileName);
+            BufferedWriter out = new BufferedWriter(
+                    new OutputStreamWriter(s.getOutputStream(), "UTF-8"));
+            out.write(formatted); out.newLine(); out.flush();
             return true;
         } catch (Exception e) {
+            System.err.println("Lỗi gửi file: " + e.getMessage());
             return false;
         }
     }
 
     private void handleIncomingFile(String raw) {
-        // [FILE]|sender-addr|fileName|base64data
+        // [FILE]|senderName-senderAddr|fileName|base64data
         String[] parts = raw.split("\\|", 4);
         if (parts.length < 4) return;
         String senderInfo = parts[1];
-        String fileName = parts[2];
-        String encoded = parts[3];
-        String senderAddr = senderInfo.split("-")[1];
-        String senderName = senderInfo.split("-")[0];
-
+        String fileName   = parts[2];
+        String encoded    = parts[3];
+        int dash = senderInfo.lastIndexOf('-');
+        String senderAddr = dash >= 0 ? senderInfo.substring(dash + 1) : senderInfo;
+        String senderName = dash >= 0 ? senderInfo.substring(0, dash) : "unknown";
         try {
-            byte[] data = Base64.getDecoder().decode(encoded);
-            String savePath = "received_" + fileName;
-            Files.write(Paths.get(savePath), data);
-            String notification = "[FILE_RECEIVED]|" + senderAddr + "|" + senderName + " đã gửi file: " + fileName + " (đã lưu tại " + savePath + ")";
-            messageQueue.add(notification);
-            chatHistory.computeIfAbsent(senderAddr, k -> new CopyOnWriteArrayList<>())
-                .add(senderName + " gửi file: " + fileName);
+            byte[] data   = Base64.getDecoder().decode(encoded);
+            String fileId = String.valueOf(System.currentTimeMillis());
+            receivedFiles.put(fileId, data);
+            receivedFileNames.put(fileId, fileName);
+            messageQueue.add("[FILE_RECEIVED]|" + senderAddr + "|" + senderName
+                    + "|" + fileName + "|" + fileId);
         } catch (Exception e) {
-            System.err.println("Lỗi lưu file: " + e.getMessage());
+            System.err.println("Lỗi nhận file: " + e.getMessage());
         }
     }
 
     // ===================== HISTORY =====================
+    /**
+     * Format lưu file: "THEM|nội dung" hoặc "ME|nội dung"
+     * → nhất quán, không phụ thuộc tên người dùng khi render
+     */
     private void saveToHistory(String msg) {
         if (msg.startsWith("[Private]|")) {
-            String[] parts = msg.split("\\|", 3);
-            if (parts.length == 3) {
-                String addr = parts[1].split("-")[1];
-                String content = parts[2];
-                chatHistory.computeIfAbsent(addr, k -> new CopyOnWriteArrayList<>()).add(content);
+            String[] p = msg.split("\\|", 3);
+            if (p.length == 3) {
+                int dash = p[1].lastIndexOf('-');
+                String senderName = dash >= 0 ? p[1].substring(0, dash) : p[1];
+                String histKey = "peer:" + senderName;
+                // "THEM|nội dung" → frontend biết đây là tin đến
+                String record = "THEM|" + p[2];
+                chatHistory.computeIfAbsent(histKey, k -> new CopyOnWriteArrayList<>()).add(record);
+                ChatHistoryStore.append(username, histKey, record);
             }
         } else if (msg.startsWith("[Group]|")) {
-            String[] parts = msg.split("\\|", 4);
-            if (parts.length == 4) {
-                chatHistory.computeIfAbsent("group:" + parts[1], k -> new CopyOnWriteArrayList<>()).add(parts[3]);
+            String[] p = msg.split("\\|", 4);
+            if (p.length == 4) {
+                int dash = p[2].lastIndexOf('-');
+                String senderName = dash >= 0 ? p[2].substring(0, dash) : p[2];
+                String histKey = "group:" + p[1];
+                // group giữ tên để hiển thị ai nói
+                String record = "THEM|" + senderName + ": " + p[3];
+                chatHistory.computeIfAbsent(histKey, k -> new CopyOnWriteArrayList<>()).add(record);
+                ChatHistoryStore.append(username, histKey, record);
             }
         } else if (msg.startsWith("[Broadcast]|")) {
-            chatHistory.computeIfAbsent("broadcast", k -> new CopyOnWriteArrayList<>()).add(msg.split("\\|", 2)[1]);
+            String content = msg.split("\\|", 2)[1];
+            String record  = "THEM|" + content;
+            chatHistory.computeIfAbsent("broadcast", k -> new CopyOnWriteArrayList<>()).add(record);
+            ChatHistoryStore.append(username, "broadcast", record);
         }
     }
 
     public List<String> getHistory(String key) {
-        return chatHistory.getOrDefault(key, new ArrayList<>());
+        List<String> fromFile = ChatHistoryStore.get(username, key);
+        return fromFile.isEmpty() ? chatHistory.getOrDefault(key, new ArrayList<>()) : fromFile;
     }
 
     // ===================== GETTERS / SETTERS =====================
-    public int getMyPort() { return myPort; }
-    public String getUsername() { return username; }
+    public int    getMyPort()    { return myPort; }
+    public String getMyIp()      { return myIp; }
+    public String getUsername()  { return username; }
     public List<String> getOnlinePeers() { return onlinePeers; }
-    public void setOnlinePeers(List<String> list) { this.onlinePeers = new CopyOnWriteArrayList<>(list); }
+    public void   setOnlinePeers(List<String> list) {
+        this.onlinePeers = new CopyOnWriteArrayList<>(list);
+    }
     public List<String> getMessages() { return messageQueue; }
+    public byte[] getReceivedFile(String fileId)     { return receivedFiles.get(fileId); }
+    public String getReceivedFileName(String fileId) { return receivedFileNames.get(fileId); }
 }

@@ -1,0 +1,14 @@
+{
+  "khuong" : {
+    "passwordHash" : "$2a$12$FCL2R4ccpeKA4XhWfOgLKehkxOaz.ijsTk72ChPmYeb2BI/oRheFi",
+    "createdAt" : "2026-05-23T10:43:32.654978400Z"
+  },
+  "trang" : {
+    "passwordHash" : "$2a$12$uZD6xQJHxhoXBJpZCogeRuUQhsdkmZgTjQwRZUaXEPiPzxK5HRCEe",
+    "createdAt" : "2026-05-23T10:44:23.263966800Z"
+  },
+  "viet" : {
+    "passwordHash" : "$2a$12$461HuqeCuYd1oW4P6HZmAO1Z/VlCsPZubpr8axg/bkeh0Qw.L6GFy",
+    "createdAt" : "2026-05-23T10:44:56.723960Z"
+  }
+}

@@ -10,5 +10,13 @@
   "viet" : {
     "passwordHash" : "$2a$12$461HuqeCuYd1oW4P6HZmAO1Z/VlCsPZubpr8axg/bkeh0Qw.L6GFy",
     "createdAt" : "2026-05-23T10:44:56.723960Z"
+  },
+  "tiendz" : {
+    "passwordHash" : "$2a$12$0yxDZJNlhE43vcqXryaXFORqv5ZFogyYVjSFEbR3ceP8LqHRnjljO",
+    "createdAt" : "2026-05-23T14:36:34.692160500Z"
+  },
+  "tiend" : {
+    "passwordHash" : "$2a$12$i3elCgbL.l6dh8Rlidjc0uY2gk1w53ugZ4iMQylnEY3/Lh4H5n.Eu",
+    "createdAt" : "2026-05-23T14:37:29.572181600Z"
   }
 }

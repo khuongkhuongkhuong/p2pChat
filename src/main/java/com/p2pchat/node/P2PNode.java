@@ -51,18 +51,28 @@ public class P2PNode {
     // ===================== AES =====================
     private String encrypt(String plain) {
         try {
-            Cipher c = Cipher.getInstance("AES/ECB/PKCS5Padding");
-            c.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(AES_KEY.getBytes(), "AES"));
-            return Base64.getEncoder().encodeToString(c.doFinal(plain.getBytes("UTF-8")));
+            Cipher c = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            byte[] iv = new byte[16];
+            SecureRandom random = new SecureRandom();
+            random.nextBytes(iv);
+            c.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(AES_KEY.getBytes("UTF-8"), "AES"),
+                    new IvParameterSpec(iv));
+            String data = Base64.getEncoder().encodeToString(c.doFinal(plain.getBytes("UTF-8")));
+            return Base64.getEncoder().encodeToString(iv) + ":" + data;
         } catch (Exception e) { return plain; }
     }
 
-    private String decrypt(String cipher) {
+    private String decrypt(String cipherText) {
         try {
-            Cipher c = Cipher.getInstance("AES/ECB/PKCS5Padding");
-            c.init(Cipher.DECRYPT_MODE, new SecretKeySpec(AES_KEY.getBytes(), "AES"));
-            return new String(c.doFinal(Base64.getDecoder().decode(cipher)), "UTF-8");
-        } catch (Exception e) { return cipher; }
+            String[] parts = cipherText.split(":", 2);
+            if (parts.length != 2) return cipherText;
+            byte[] iv = Base64.getDecoder().decode(parts[0]);
+            byte[] data = Base64.getDecoder().decode(parts[1]);
+            Cipher c = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            c.init(Cipher.DECRYPT_MODE, new SecretKeySpec(AES_KEY.getBytes("UTF-8"), "AES"),
+                    new IvParameterSpec(iv));
+            return new String(c.doFinal(data), "UTF-8");
+        } catch (Exception e) { return cipherText; }
     }
 
     // ===================== LISTENING =====================
@@ -74,7 +84,8 @@ public class P2PNode {
                 while (true) {
                     try (Socket s = ss.accept();
                          BufferedReader in = new BufferedReader(
-                                 new InputStreamReader(s.getInputStream(), "UTF-8"))) {
+                                 new InputStreamReader(s.getInputStream(), "UTF-8"));
+                         PrintWriter out = new PrintWriter(s.getOutputStream(), true)) {
                         String raw = in.readLine();
                         if (raw == null) continue;
                         if (raw.startsWith("[FILE]|")) {
@@ -84,14 +95,15 @@ public class P2PNode {
                             messageQueue.add(msg);
                             saveToHistory(msg);
                         }
-                    } catch (Exception e) {
-                        System.err.println("Lỗi nhận tin: " + e.getMessage());
+                        out.println("ACK");
                     }
                 }
-            } catch (IOException e) { e.printStackTrace(); }
-        }, "p2p-listener").start();
-    }
-
+            } catch (Exception e) {
+                System.err.println("Lỗi lắng nghe: " + e.getMessage());
+            }
+        }
+    }).start();
+}
     private String decryptMessage(String raw) {
         try {
             if (raw.startsWith("[GROUP_INVITE]|") || raw.startsWith("[GROUP_DELETE]|")) return raw;
@@ -115,18 +127,27 @@ public class P2PNode {
     public boolean sendDirect(String targetAddr, String targetName, String msg) {
         String formatted = "[Private]|" + username + "-" + getMyAddr() + "|" + encrypt(msg);
         String[] parts   = targetAddr.split(":");
-        try (Socket s = new Socket()) {
-            s.connect(new InetSocketAddress(parts[0], Integer.parseInt(parts[1])), 2000);
-            new PrintWriter(s.getOutputStream(), true).println(formatted);
-            String histKey = "peer:" + targetName;
-            String record  = "ME|" + msg;
-            chatHistory.computeIfAbsent(histKey, k -> new CopyOnWriteArrayList<>()).add(record);
-            ChatHistoryStore.append(username, histKey, record);
-            return true;
-        } catch (Exception e) {
-            System.err.println(">>> Peer " + targetAddr + " không phản hồi.");
-            return false;
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            try (Socket s = new Socket()) {
+                s.connect(new InetSocketAddress(parts[0], Integer.parseInt(parts[1])), 2000);
+                PrintWriter out = new PrintWriter(s.getOutputStream(), true);
+                BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), "UTF-8"));
+                out.println(formatted);
+                String response = in.readLine();
+                if ("ACK".equals(response)) {
+                    String histKey = "peer:" + targetName;
+                    String record  = "ME|" + msg;
+                    chatHistory.computeIfAbsent(histKey, k -> new CopyOnWriteArrayList<>()).add(record);
+                    ChatHistoryStore.append(username, histKey, record);
+                    return true;
+                }
+            } catch (Exception e) {
+                System.err.println(">>> Thử gửi tới " + targetAddr + " lần " + attempt + " thất bại: " + e.getMessage());
+            }
+            try { Thread.sleep(250); } catch (InterruptedException ignored) {}
         }
+        System.err.println(">>> Peer " + targetAddr + " không phản hồi sau 2 lần thử.");
+        return false;
     }
 
     // ===================== STORE-AND-FORWARD =====================

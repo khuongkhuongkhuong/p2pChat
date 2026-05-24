@@ -62,7 +62,7 @@ Dự án triển khai:
 
 1. Mở terminal tại thư mục dự án:
    ```powershell
-   cd C:\DATA\htpt\p2pChat-main
+   cd ...\p2pChat-main
    ```
 2. Biên dịch và đóng gói:
    ```powershell

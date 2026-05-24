@@ -1,18 +1,70 @@
 package com.p2pchat.bootstrap;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.p2pchat.auth.UserStore;
 
-import java.io.*;
-import java.net.*;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-
 public class BootstrapServer {
+
+    private static final ObjectMapper mapper = new ObjectMapper();
+    private static final String PENDING_FILE = "pending_messages.json";
 
     private static final Map<String, String>       onlinePeers      = new ConcurrentHashMap<>();
     private static final Map<String, long[]>       peerTimestamps   = new ConcurrentHashMap<>();
     private static final Map<String, List<String>> pendingMessages  = new ConcurrentHashMap<>();
     private static final long TIMEOUT_MS = 10_000;
+
+    static {
+        pendingMessages.putAll(loadPendingMessages());
+    }
+
+    private static Map<String, List<String>> loadPendingMessages() {
+        Path path = Paths.get(PENDING_FILE);
+        if (!Files.exists(path)) return new ConcurrentHashMap<>();
+        try {
+            ObjectNode root = (ObjectNode) mapper.readTree(path.toFile());
+            Map<String, List<String>> map = new ConcurrentHashMap<>();
+            root.fieldNames().forEachRemaining(name -> {
+                List<String> list = new CopyOnWriteArrayList<>();
+                root.get(name).forEach(node -> list.add(node.asText()));
+                map.put(name, list);
+            });
+            return map;
+        } catch (Exception e) {
+            System.err.println("Không đọc được pending messages: " + e.getMessage());
+            return new ConcurrentHashMap<>();
+        }
+    }
+
+    private static void persistPendingMessages() {
+        synchronized (PENDING_FILE.intern()) {
+            try {
+                mapper.writerWithDefaultPrettyPrinter()
+                        .writeValue(Paths.get(PENDING_FILE).toFile(), pendingMessages);
+            } catch (IOException e) {
+                System.err.println("Không ghi được pending messages: " + e.getMessage());
+            }
+        }
+    }
 
     public static void main(String[] args) {
         startUdpDiscovery();
@@ -105,7 +157,10 @@ public class BootstrapServer {
 
                 List<String> waiting    = pendingMessages.getOrDefault(name, new ArrayList<>());
                 String       pendingStr = String.join("~~", waiting);
-                pendingMessages.remove(name);
+                if (!waiting.isEmpty()) {
+                    pendingMessages.remove(name);
+                    persistPendingMessages();
+                }
 
                 out.println(list + "|PENDING|" + pendingStr);
                 System.out.println("Peer online: " + name + " @ " + addr
@@ -115,7 +170,8 @@ public class BootstrapServer {
             } else if (line.startsWith("STORE|")) {
                 String[] parts = line.split("\\|", 3);
                 if (parts.length == 3) {
-                    pendingMessages.computeIfAbsent(parts[1], k -> new ArrayList<>()).add(parts[2]);
+                    pendingMessages.computeIfAbsent(parts[1], k -> new CopyOnWriteArrayList<>()).add(parts[2]);
+                    persistPendingMessages();
                     System.out.println(">>> Lưu tin chờ cho: " + parts[1]);
                     out.println("STORED");
                 }

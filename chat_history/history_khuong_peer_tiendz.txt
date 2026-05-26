@@ -1,2 +1,12 @@
 ME|ei
 THEM|jv
+ME|hello
+THEM|..
+ME|ád
+THEM|ê
+THEM|ád
+THEM|s?vcxzv
+THEM|asd\
+ME|ê
+THEM|jc
+THEM|ê

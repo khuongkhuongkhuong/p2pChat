@@ -1,0 +1,6 @@
+com\p2pchat\node\P2PNode.class
+com\p2pchat\bootstrap\BootstrapServer.class
+com\p2pchat\auth\ChatHistoryStore.class
+com\p2pchat\auth\GroupStore.class
+com\p2pchat\auth\UserStore.class
+com\p2pchat\web\App.class

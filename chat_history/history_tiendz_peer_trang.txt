@@ -1,0 +1,12 @@
+ME|e
+ME|ê
+ME|a
+ME|ád
+ME|ád
+ME|ê
+ME|hú
+ME|ádfasd
+THEM|123
+ME|ê
+ME|e
+THEM|?

@@ -1,5 +1,6 @@
-C:\DATA\htpt\p2pChat-main\src\main\java\com\p2pchat\web\App.java
-C:\DATA\htpt\p2pChat-main\src\main\java\com\p2pchat\auth\UserStore.java
-C:\DATA\htpt\p2pChat-main\src\main\java\com\p2pchat\bootstrap\BootstrapServer.java
-C:\DATA\htpt\p2pChat-main\src\main\java\com\p2pchat\node\P2PNode.java
-C:\DATA\htpt\p2pChat-main\src\main\java\com\p2pchat\auth\ChatHistoryStore.java
+C:\DATA\htpt\p2pChat\src\main\java\com\p2pchat\auth\UserStore.java
+C:\DATA\htpt\p2pChat\src\main\java\com\p2pchat\bootstrap\BootstrapServer.java
+C:\DATA\htpt\p2pChat\src\main\java\com\p2pchat\auth\ChatHistoryStore.java
+C:\DATA\htpt\p2pChat\src\main\java\com\p2pchat\auth\GroupStore.java
+C:\DATA\htpt\p2pChat\src\main\java\com\p2pchat\web\App.java
+C:\DATA\htpt\p2pChat\src\main\java\com\p2pchat\node\P2PNode.java

@@ -1,0 +1,18 @@
+# Maven
+target/
+
+# Java
+*.class
+*.jar
+
+# VS Code
+.vscode/
+
+# Logs
+*.log
+
+# Runtime data
+chat_history/
+users.json
+groups.json
+pending_messages.json

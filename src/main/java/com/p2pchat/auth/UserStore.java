@@ -1,16 +1,21 @@
 package com.p2pchat.auth;
 
-import at.favre.lib.crypto.bcrypt.BCrypt;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.io.*;
-import java.nio.file.*;
-import java.time.Instant;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
+import at.favre.lib.crypto.bcrypt.BCrypt;
 
 public class UserStore {
-    private static final String FILE   = "users.json";
+    private static final String FILE = "users.json";
     private static final ObjectMapper mapper = new ObjectMapper();
     private static final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
@@ -18,9 +23,12 @@ public class UserStore {
     private static ObjectNode load() {
         try {
             Path p = Paths.get(FILE);
-            if (!Files.exists(p)) return mapper.createObjectNode();
+            if (!Files.exists(p))
+                return mapper.createObjectNode();
             return (ObjectNode) mapper.readTree(p.toFile());
-        } catch (Exception e) { return mapper.createObjectNode(); }
+        } catch (Exception e) {
+            return mapper.createObjectNode();
+        }
     }
 
     // ── Ghi xuống file ───────────────────────────────────────────────────────
@@ -38,7 +46,8 @@ public class UserStore {
         lock.writeLock().lock();
         try {
             ObjectNode users = load();
-            if (users.has(username)) return "USERNAME_TAKEN";
+            if (users.has(username))
+                return "USERNAME_TAKEN";
 
             String hash = BCrypt.withDefaults().hashToString(12, password.toCharArray());
             ObjectNode user = mapper.createObjectNode();
@@ -56,14 +65,17 @@ public class UserStore {
 
     // ── Đăng nhập → "OK" | "WRONG_PASSWORD" | "NOT_FOUND" ──────────────────
     public static String login(String username, String password) {
-        if (username == null || password == null) return "NOT_FOUND";
+        if (username == null || password == null)
+            return "NOT_FOUND";
         lock.readLock().lock();
         try {
             ObjectNode users = load();
-            if (!users.has(username)) return "NOT_FOUND";
+            if (!users.has(username))
+                return "NOT_FOUND";
             String hash = users.get(username).get("passwordHash").asText();
             return BCrypt.verifyer().verify(password.toCharArray(), hash).verified
-                    ? "OK" : "WRONG_PASSWORD";
+                    ? "OK"
+                    : "WRONG_PASSWORD";
         } finally {
             lock.readLock().unlock();
         }
@@ -72,10 +84,24 @@ public class UserStore {
     // ── Kiểm tra tài khoản tồn tại (dùng bởi BootstrapServer) ──────────────
     // Trả về "EXISTS" nếu có, "NOT_FOUND" nếu không
     public static String exists(String username) {
-        if (username == null) return "NOT_FOUND";
+        if (username == null)
+            return "NOT_FOUND";
         lock.readLock().lock();
         try {
             return load().has(username) ? "EXISTS" : "NOT_FOUND";
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    // Lấy danh sách toàn bộ username đã đăng ký
+    public static List<String> getAllUsernames() {
+        lock.readLock().lock();
+        try {
+            ObjectNode users = load();
+            List<String> names = new ArrayList<>();
+            users.fieldNames().forEachRemaining(names::add);
+            return names;
         } finally {
             lock.readLock().unlock();
         }

@@ -6,7 +6,6 @@
         <link rel="stylesheet" href="/style.css" />
     </head>
     <body>
-        <!-- ── AUTH OVERLAY ─────────────────────────────────────────────────────── -->
         <div id="auth-overlay">
             <div class="auth-box">
                 <h2>💬 P2P Chat</h2>
@@ -16,7 +15,6 @@
                     <button class="auth-tab" id="tab-register" onclick="switchAuthTab('register')">Đăng ký</button>
                 </div>
 
-                <!-- Đăng nhập -->
                 <div id="panel-login">
                     <input
                         class="auth-input"
@@ -30,7 +28,6 @@
                     <button class="auth-btn" id="login-btn" onclick="doLogin()">Đăng nhập</button>
                 </div>
 
-                <!-- Đăng ký -->
                 <div id="panel-register" style="display: none">
                     <input
                         class="auth-input"
@@ -55,7 +52,6 @@
             </div>
         </div>
 
-        <!-- ── GROUP MODAL ───────────────────────────────────────────────────────── -->
         <div id="group-modal">
             <div class="modal-box">
                 <h3>Tạo nhóm chat</h3>
@@ -68,7 +64,6 @@
             </div>
         </div>
 
-        <!-- ── SIDEBAR ───────────────────────────────────────────────────────────── -->
         <div id="sidebar">
             <div id="my-info">
                 <span id="my-info-text">Đang kết nối...</span>
@@ -85,7 +80,6 @@
             </div>
         </div>
 
-        <!-- ── CHAT ──────────────────────────────────────────────────────────────── -->
         <div id="chat">
             <div id="empty-state">
                 <div class="big-icon">💬</div>
@@ -111,18 +105,16 @@
         </div>
 
         <script>
-            // ─── STATE ────────────────────────────────────────────────────────────────────
-            let myName = "",
-                myAddr = "",
-                myPort = 0;
+            let myName = "";
+            let myAddr = "";
+            let myPort = 0;
             let currentTarget = null;
             let peers = [];
-            let groups = JSON.parse(localStorage.getItem("p2p_groups") || "[]");
+            let groups = [];
             let chatStorage = {};
             let unread = new Set();
             let refreshTimer = null;
 
-            // ─── KHỞI ĐỘNG ───────────────────────────────────────────────────────────────
             window.addEventListener("load", async () => {
                 try {
                     const host = await (await fetch("/api/bootstrap-host")).text();
@@ -131,9 +123,41 @@
                 } catch (e) {
                     document.getElementById("bootstrap-status").textContent = "🔴 Không kết nối được Bootstrap";
                 }
+
+                try {
+                    const infoRes = await fetch("/api/info");
+
+                    if (!infoRes.ok) {
+                        localStorage.removeItem("p2p_current_user");
+                        return;
+                    }
+
+                    const info = await infoRes.json();
+
+                    myName = info.name;
+                    myAddr = info.addr;
+                    myPort = info.port;
+
+                    document.getElementById("auth-overlay").style.display = "none";
+
+                    currentTarget = null;
+                    peers = [];
+                    groups = [];
+                    chatStorage = {};
+                    unread = new Set();
+
+                    await loadAllHistory();
+                    await loadGroups();
+
+                    if (refreshTimer) clearInterval(refreshTimer);
+                    refreshTimer = setInterval(refresh, 500);
+
+                    await refresh();
+                } catch (e) {
+                    localStorage.removeItem("p2p_current_user");
+                }
             });
 
-            // ─── AUTH TAB ─────────────────────────────────────────────────────────────────
             function switchAuthTab(tab) {
                 document.getElementById("panel-login").style.display = tab === "login" ? "" : "none";
                 document.getElementById("panel-register").style.display = tab === "register" ? "" : "none";
@@ -144,13 +168,13 @@
                 );
             }
 
-            // ─── ĐĂNG KÝ ─────────────────────────────────────────────────────────────────
             async function doRegister() {
                 const username = document.getElementById("reg-username").value.trim();
                 const password = document.getElementById("reg-password").value;
                 const password2 = document.getElementById("reg-password2").value;
                 const errEl = document.getElementById("reg-error");
                 const okEl = document.getElementById("reg-success");
+
                 errEl.textContent = "";
                 okEl.textContent = "";
 
@@ -162,11 +186,13 @@
                 const btn = document.getElementById("reg-btn");
                 btn.disabled = true;
                 btn.textContent = "Đang tạo...";
+
                 try {
                     const res = await fetch(
                         `/api/register?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
                         { method: "POST" },
                     );
+
                     if (res.ok) {
                         okEl.textContent = "✅ Tạo tài khoản thành công! Đang chuyển sang đăng nhập...";
                         ["reg-username", "reg-password", "reg-password2"].forEach(
@@ -179,15 +205,16 @@
                 } catch (e) {
                     errEl.textContent = "❌ Không kết nối được server";
                 }
+
                 btn.disabled = false;
                 btn.textContent = "Tạo tài khoản";
             }
 
-            // ─── ĐĂNG NHẬP ───────────────────────────────────────────────────────────────
             async function doLogin() {
                 const username = document.getElementById("login-username").value.trim();
                 const password = document.getElementById("login-password").value;
                 const errEl = document.getElementById("login-error");
+
                 errEl.textContent = "";
 
                 if (!username || !password) return (errEl.textContent = "Vui lòng nhập đủ thông tin");
@@ -195,69 +222,89 @@
                 const btn = document.getElementById("login-btn");
                 btn.disabled = true;
                 btn.textContent = "Đang đăng nhập...";
-                try {
-                    // 1. Xác thực mật khẩu
-                    const authRes = await fetch(
-                        `/api/auth?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
-                        { method: "POST" },
-                    );
-                    if (!authRes.ok) {
-                        errEl.textContent = "❌ " + (await authRes.text());
-                        return;
-                    }
 
-                    // 2. Vào mạng P2P
-                    const loginRes = await fetch(`/api/login?name=${encodeURIComponent(username)}`, { method: "POST" });
+                try {
+                    const loginRes = await fetch(
+                        `/api/login?name=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
+                        {
+                            method: "POST",
+                        },
+                    );
+
                     if (!loginRes.ok) {
-                        errEl.textContent = "❌ Lỗi kết nối server";
+                        errEl.textContent = "❌ " + (await loginRes.text());
                         return;
                     }
 
                     myName = username;
                     document.getElementById("auth-overlay").style.display = "none";
 
-                    // 3. Load lịch sử cũ
-                    await loadAllHistory();
+                    currentTarget = null;
+                    peers = [];
+                    groups = [];
+                    chatStorage = {};
+                    unread = new Set();
 
-                    // 4. Bắt đầu polling
+                    document.getElementById("msgs").innerHTML = "";
+                    document.getElementById("peer-list").innerHTML = "";
+                    document.getElementById("group-items").innerHTML = "";
+                    document.getElementById("empty-state").style.display = "flex";
+                    document.getElementById("chat-main").style.display = "none";
+
+                    await loadAllHistory();
+                    await loadGroups();
+
+                    renderPeerList();
+                    renderMessages();
+
                     if (refreshTimer) clearInterval(refreshTimer);
-                    refreshTimer = setInterval(refresh, 1500);
-                    refresh();
+                    refreshTimer = setInterval(refresh, 500);
+                    await refresh();
                 } catch (e) {
                     errEl.textContent = "❌ Không kết nối được server";
                 }
+
                 btn.disabled = false;
                 btn.textContent = "Đăng nhập";
             }
 
-            // ─── ĐĂNG XUẤT ───────────────────────────────────────────────────────────────
             async function doLogout() {
                 await fetch("/api/logout", { method: "POST" });
+
                 if (refreshTimer) clearInterval(refreshTimer);
+                localStorage.removeItem("p2p_current_user");
                 myName = "";
                 myAddr = "";
                 myPort = 0;
                 currentTarget = null;
                 peers = [];
+                groups = [];
                 chatStorage = {};
                 unread = new Set();
+
                 document.getElementById("auth-overlay").style.display = "flex";
                 document.getElementById("login-username").value = "";
                 document.getElementById("login-password").value = "";
                 document.getElementById("login-error").textContent = "";
                 document.getElementById("my-info-text").textContent = "Đang kết nối...";
                 document.getElementById("msgs").innerHTML = "";
+                document.getElementById("peer-list").innerHTML = "";
+                document.getElementById("group-items").innerHTML = "";
                 document.getElementById("empty-state").style.display = "flex";
                 document.getElementById("chat-main").style.display = "none";
+
                 switchAuthTab("login");
             }
 
-            // ─── LOAD LỊCH SỬ TẤT CẢ SAU KHI ĐĂNG NHẬP ─────────────────────────────────
             async function loadAllHistory() {
+                chatStorage = {};
+
                 try {
                     const keys = await (await fetch("/api/conversations")).json();
+
                     for (const key of keys) {
                         const lines = await (await fetch(`/api/history?key=${encodeURIComponent(key)}`)).json();
+
                         if (lines && lines.length > 0) {
                             chatStorage[key] = lines.map((line) => parseHistoryLine(line));
                         }
@@ -267,34 +314,57 @@
                 }
             }
 
-            // Chuyển dòng lưu file "ME|nội dung" / "THEM|nội dung" thành object render được
+            async function loadGroups() {
+                try {
+                    const res = await fetch("/api/groups");
+                    groups = await res.json();
+                } catch (e) {
+                    groups = [];
+                    console.error("Lỗi load groups:", e);
+                }
+            }
+
+            async function loadGroupMembers(groupId) {
+                try {
+                    const res = await fetch(`/api/group-members?groupId=${encodeURIComponent(groupId)}`);
+                    return await res.json();
+                } catch (e) {
+                    console.error("Lỗi load group members:", e);
+                    return [];
+                }
+            }
+
             function parseHistoryLine(line) {
                 if (line.startsWith("ME|")) return { raw: line, mine: true, txt: line.substring(3) };
                 if (line.startsWith("THEM|")) return { raw: line, mine: false, txt: line.substring(5) };
-                // Fallback cho dữ liệu cũ (format "Tôi: ..." hoặc "name: ...")
                 if (line.startsWith("Tôi:")) return { raw: line, mine: true, txt: line.substring(5).trim() };
                 return { raw: line, mine: false, txt: line };
             }
 
-            // ─── REFRESH ─────────────────────────────────────────────────────────────────
             async function refresh() {
                 try {
                     const info = await (await fetch("/api/info")).json();
+
                     myPort = info.port;
                     myName = info.name;
                     myAddr = info.addr || info.ip + ":" + info.port;
+
                     document.getElementById("my-info-text").textContent = `👤 ${info.name}  •  ${myAddr}`;
 
                     peers = await (await fetch("/api/peers")).json();
+                    await loadGroups();
+
                     renderPeerList();
 
                     const msgs = await (await fetch("/api/messages")).json();
-                    msgs.forEach(handleIncoming);
+
+                    for (const msg of msgs) {
+                        await handleIncoming(msg);
+                    }
                 } catch (e) {}
             }
 
-            // ─── HANDLE INCOMING ─────────────────────────────────────────────────────────
-            function handleIncoming(raw) {
+            async function handleIncoming(raw) {
                 if (raw.startsWith("[Private]|")) {
                     const parts = raw.split("|");
                     const senderInfo = parts[1];
@@ -303,8 +373,13 @@
                     const senderAddr = senderInfo.substring(dash + 1);
                     const content = parts.slice(2).join("|");
                     const histKey = "peer:" + senderName;
-                    // Lưu RAM theo format THEM| để nhất quán với file
-                    pushMsg(histKey, { raw: "THEM|" + content, _addr: senderAddr, _name: senderName });
+
+                    pushMsg(histKey, {
+                        raw: "THEM|" + content,
+                        _addr: senderAddr,
+                        _name: senderName,
+                    });
+
                     if (!currentTarget || currentTarget.histKey !== histKey) unread.add(histKey);
                 } else if (raw.startsWith("[Group]|")) {
                     const parts = raw.split("|");
@@ -312,43 +387,48 @@
                     const senderName = parts[2].split("-")[0];
                     const content = parts.slice(3).join("|");
                     const histKey = "group:" + groupId;
-                    pushMsg(histKey, { raw: "THEM|" + senderName + ": " + content });
+
+                    pushMsg(histKey, {
+                        raw: "THEM|" + senderName + ": " + content,
+                    });
+
                     if (!currentTarget || currentTarget.histKey !== histKey) unread.add(histKey);
                 } else if (raw.startsWith("[Broadcast]|")) {
-                    pushMsg("broadcast", { raw: "THEM|📢 " + raw.split("|").slice(1).join("|") });
+                    pushMsg("broadcast", {
+                        raw: "THEM|📢 " + raw.split("|").slice(1).join("|"),
+                    });
                 } else if (raw.startsWith("[GROUP_INVITE]|")) {
                     const parts = raw.split("|");
-                    const groupId = parts[1],
-                        groupName = parts[2];
-                    const members = parts[3].split(",");
+                    const groupName = parts[2];
                     const creator = parts[4].split("-")[0];
-                    if (!groups.find((g) => g.id === groupId)) {
-                        groups.push({ id: groupId, name: groupName, members });
-                        localStorage.setItem("p2p_groups", JSON.stringify(groups));
-                        renderPeerList();
-                        showToast(`${creator} đã thêm bạn vào nhóm "${groupName}"`);
-                    }
+
+                    await loadGroups();
+                    renderPeerList();
+                    showToast(`${creator} đã thêm bạn vào nhóm "${groupName}"`);
                 } else if (raw.startsWith("[GROUP_DELETE]|")) {
                     const parts = raw.split("|");
-                    const groupId = parts[1],
-                        groupName = parts[2];
+                    const groupId = parts[1];
+                    const groupName = parts[2];
                     const creator = parts[3].split("-")[0];
+
                     groups = groups.filter((g) => g.id !== groupId);
-                    localStorage.setItem("p2p_groups", JSON.stringify(groups));
+
                     if (currentTarget && currentTarget.groupId === groupId) {
                         currentTarget = null;
                         document.getElementById("empty-state").style.display = "flex";
                         document.getElementById("chat-main").style.display = "none";
                     }
+
                     renderPeerList();
                     showToast(`${creator} đã giải tán nhóm "${groupName}"`, "#ff4d4d");
                 } else if (raw.startsWith("[FILE_RECEIVED]|")) {
                     const parts = raw.split("|");
-                    const senderAddr = parts[1],
-                        senderName = parts[2];
-                    const fileName = parts[3],
-                        fileId = parts[4];
+                    const senderAddr = parts[1];
+                    const senderName = parts[2];
+                    const fileName = parts[3];
+                    const fileId = parts[4];
                     const histKey = "peer:" + senderName;
+
                     pushMsg(histKey, {
                         raw: "THEM|FILE",
                         type: "file-in",
@@ -357,7 +437,11 @@
                         _addr: senderAddr,
                         _name: senderName,
                     });
+
                     if (!currentTarget || currentTarget.histKey !== histKey) unread.add(histKey);
+                } else if (raw.startsWith("[PENDING_NOTICE]|")) {
+                    const count = raw.split("|")[1] || "0";
+                    showToast(`📦 Bạn vừa nhận ${count} tin nhắn chờ`, "#28a745");
                 }
 
                 renderMessages();
@@ -366,7 +450,7 @@
 
             function pushMsg(key, msg) {
                 if (!chatStorage[key]) chatStorage[key] = [];
-                // Nếu chưa có txt thì parse từ raw
+
                 if (!msg.txt && msg.raw) {
                     if (msg.raw.startsWith("ME|")) {
                         msg.mine = true;
@@ -376,58 +460,81 @@
                         msg.txt = msg.raw.substring(5);
                     }
                 }
+
                 chatStorage[key].push(msg);
             }
 
-            // ─── RENDER PEER LIST ─────────────────────────────────────────────────────────
             function renderPeerList() {
                 const list = document.getElementById("peer-list");
                 let html = "";
 
                 (peers || []).forEach((p) => {
                     if (!p.includes("-")) return;
+
                     const dash = p.lastIndexOf("-");
                     const name = p.substring(0, dash);
                     const addr = p.substring(dash + 1);
-                    if (addr === myAddr) return;
+
+                    if (name === myName) return;
 
                     const histKey = "peer:" + name;
                     const isActive = currentTarget && currentTarget.histKey === histKey;
                     const hasUnread = unread.has(histKey);
-                    html += `<div class="peer-item ${isActive ? "active" : ""}"
-                      onclick="selectPeer('${addr}','${name}','${histKey}')">
-            <div class="peer-avatar">${name[0].toUpperCase()}</div>
-            <div><div class="peer-name">${name}</div>
-                 <div class="peer-sub">${addr}</div></div>
-            ${hasUnread ? '<div class="unread-dot"></div>' : ""}
-        </div>`;
+                    const isOffline = addr === "OFFLINE";
+
+                    html += `
+            <div class="peer-item ${isActive ? "active" : ""} ${isOffline ? "offline" : ""}"
+                 onclick="selectPeer('${addr}','${name}','${histKey}')">
+              <div class="peer-avatar ${isOffline ? "offline-avatar" : ""}">
+                ${name[0].toUpperCase()}
+              </div>
+              <div>
+                <div class="peer-name">${name}</div>
+                <div class="peer-sub">
+                  ${isOffline ? "Offline • có thể gửi tin chờ" : addr}
+                </div>
+              </div>
+              ${hasUnread ? '<div class="unread-dot"></div>' : ""}
+            </div>
+          `;
                 });
+
                 list.innerHTML =
                     html ||
                     '<div style="padding:20px;color:#aaa;text-align:center;font-size:13px">Chưa có peer online</div>';
 
                 const groupItems = document.getElementById("group-items");
                 let ghtml = "";
+
                 groups.forEach((g) => {
                     const histKey = "group:" + g.id;
                     const isActive = currentTarget && currentTarget.histKey === histKey;
                     const hasUnread = unread.has(histKey);
-                    ghtml += `<div class="peer-item ${isActive ? "active" : ""}"
-                       onclick="selectGroup('${g.id}','${g.name}','${histKey}')">
-            <div class="peer-avatar purple">${g.name[0].toUpperCase()}</div>
-            <div style="flex:1">
+                    const isOwner = g.owner === myName;
+
+                    ghtml += `
+            <div class="peer-item ${isActive ? "active" : ""}"
+                 onclick="selectGroup('${g.id}','${g.name}','${histKey}')">
+              <div class="peer-avatar purple">${g.name[0].toUpperCase()}</div>
+              <div style="flex:1">
                 <div class="peer-name">${g.name}</div>
-                <div class="peer-sub">${g.members.length} thành viên</div>
+                <div class="peer-sub">${isOwner ? "👑 Chủ nhóm" : "Thành viên"}</div>
+              </div>
+              ${hasUnread ? '<div class="unread-dot"></div>' : ""}
+              ${
+                  isOwner
+                      ? `<button onclick="event.stopPropagation();deleteGroup('${g.id}','${g.name}')"
+                       class="del-group-btn" title="Xóa nhóm">✕</button>`
+                      : ""
+              }
             </div>
-            ${hasUnread ? '<div class="unread-dot"></div>' : ""}
-            <button onclick="event.stopPropagation();deleteGroup('${g.id}','${g.name}')"
-                class="del-group-btn" title="Xóa nhóm">✕</button>
-        </div>`;
+          `;
                 });
-                groupItems.innerHTML = ghtml;
+
+                groupItems.innerHTML =
+                    ghtml || '<div style="padding:20px;color:#aaa;text-align:center;font-size:13px">Chưa có nhóm</div>';
             }
 
-            // ─── SELECT PEER / GROUP ──────────────────────────────────────────────────────
             function selectPeer(addr, name, histKey) {
                 currentTarget = { type: "peer", addr, name, histKey };
                 unread.delete(histKey);
@@ -436,66 +543,110 @@
                 renderPeerList();
             }
 
-            function selectGroup(groupId, name, histKey) {
+            async function selectGroup(groupId, name, histKey) {
                 const g = groups.find((x) => x.id === groupId);
-                currentTarget = { type: "group", groupId, name, members: g ? g.members : [], histKey };
+                const members = await loadGroupMembers(groupId);
+
+                currentTarget = {
+                    type: "group",
+                    groupId,
+                    name,
+                    members,
+                    histKey,
+                };
+
                 unread.delete(histKey);
-                showChatArea(name, `${g ? g.members.length : 0} thành viên`, name[0].toUpperCase(), "#7b2ff7");
+
+                showChatArea(
+                    name,
+                    `${members.length} thành viên${g && g.owner === myName ? " • Bạn là chủ nhóm" : ""}`,
+                    name[0].toUpperCase(),
+                    "#7b2ff7",
+                );
+
                 renderMessages();
                 renderPeerList();
             }
 
             function showChatArea(title, sub, avatarChar, color) {
                 document.getElementById("empty-state").style.display = "none";
+
                 const cm = document.getElementById("chat-main");
                 cm.style.display = "flex";
                 cm.style.flexDirection = "column";
+
                 document.getElementById("chat-header-name").textContent = title;
-                document.getElementById("chat-header-sub").textContent = sub;
+                document.getElementById("chat-header-sub").textContent =
+                    sub === "OFFLINE" ? "Offline • người có thể gửi tin chờ" : sub;
+
                 const av = document.getElementById("header-avatar");
                 av.textContent = avatarChar;
                 av.style.background = color;
             }
 
-            // ─── RENDER MESSAGES ──────────────────────────────────────────────────────────
             function renderMessages() {
                 if (!currentTarget) return;
+
                 const msgs = chatStorage[currentTarget.histKey] || [];
                 const div = document.getElementById("msgs");
+
                 div.innerHTML = msgs
                     .map((m) => {
                         if (m.type === "error") return `<div class="error-bubble">${m.txt}</div>`;
                         if (m.type === "stored") return `<div class="stored-bubble">${m.txt}</div>`;
                         if (m.type === "system") return `<div class="system-msg">${m.txt}</div>`;
-                        // File nhận được — có nút tải xuống
-                        if (m.type === "file-in")
+
+                        if (m.type === "file-in") {
                             return `
-            <div class="bubble theirs file-bubble">
-                <span class="file-icon">📎</span>
-                <div>
-                    <div style="font-size:13px;margin-bottom:6px">${m._name || ""} gửi file: ${m.fileName}</div>
-                    <a href="/api/download?fileId=${m.fileId}" download="${m.fileName}" class="download-btn">⬇ Tải xuống</a>
+                <div class="bubble theirs file-bubble">
+                  <span class="file-icon">📎</span>
+                  <div>
+                    <div style="font-size:13px;margin-bottom:6px">
+                      ${m._name || ""} gửi file: ${m.fileName}
+                    </div>
+                    <a href="/api/download?fileId=${m.fileId}"
+                       download="${m.fileName}"
+                       class="download-btn">⬇ Tải xuống</a>
+                  </div>
                 </div>
-            </div>`;
-                        // File đã gửi
-                        if (m.type === "file")
+              `;
+                        }
+
+                        if (m.type === "file") {
                             return `<div class="bubble mine file-bubble"><span class="file-icon">📎</span>${m.txt}</div>`;
-                        // Tin nhắn thường — dùng mine/txt đã được parse
+                        }
+
                         return `<div class="bubble ${m.mine ? "mine" : "theirs"}">${m.txt}</div>`;
                     })
                     .join("");
+
                 div.scrollTop = div.scrollHeight;
             }
 
-            // ─── SEND ─────────────────────────────────────────────────────────────────────
             async function send() {
                 const input = document.getElementById("msgInput");
                 const val = input.value.trim();
+
                 if (!val || !currentTarget) return;
+
                 input.value = "";
 
                 const histKey = currentTarget.histKey;
-                // Lưu RAM theo format ME| để nhất quán
+
+                if (currentTarget.type === "peer") {
+                    const latest = (peers || []).find((p) => {
+                        if (!p.includes("-")) return false;
+                        const dash = p.lastIndexOf("-");
+                        const name = p.substring(0, dash);
+                        return name === currentTarget.name;
+                    });
+
+                    if (latest) {
+                        const dash = latest.lastIndexOf("-");
+                        currentTarget.addr = latest.substring(dash + 1);
+                    }
+                }
+
                 pushMsg(histKey, { raw: "ME|" + val, mine: true, txt: val });
                 renderMessages();
 
@@ -504,8 +655,10 @@
                         `/api/send?target=${encodeURIComponent(currentTarget.addr)}&targetName=${encodeURIComponent(currentTarget.name)}&msg=${encodeURIComponent(val)}`,
                         { method: "POST" },
                     );
+
                     if (!res.ok) {
                         const txt = await res.text();
+
                         pushMsg(
                             histKey,
                             txt === "STORED"
@@ -514,84 +667,133 @@
                                       type: "stored",
                                       txt: "📦 Peer offline — tin đã lưu, sẽ giao khi họ online lại.",
                                   }
-                                : { raw: "SYS|error", type: "error", txt: "⚠️ Gửi thất bại." },
+                                : {
+                                      raw: "SYS|error",
+                                      type: "error",
+                                      txt: "⚠️ Gửi thất bại.",
+                                  },
                         );
+
                         renderMessages();
                     }
-                } else {
-                    await fetch(
-                        `/api/sendgroup?groupId=${encodeURIComponent(currentTarget.groupId)}&msg=${encodeURIComponent(val)}&members=${encodeURIComponent(currentTarget.members.join(","))}`,
+                } else if (currentTarget.type === "group") {
+                    const members = await loadGroupMembers(currentTarget.groupId);
+                    currentTarget.members = members;
+
+                    const res = await fetch(
+                        `/api/sendgroup?groupId=${encodeURIComponent(currentTarget.groupId)}&msg=${encodeURIComponent(val)}`,
                         { method: "POST" },
                     );
+
+                    if (!res.ok) {
+                        pushMsg(histKey, {
+                            raw: "SYS|error",
+                            type: "error",
+                            txt: "⚠️ Gửi tin nhắn nhóm thất bại.",
+                        });
+                        renderMessages();
+                    }
                 }
             }
 
-            // ─── SEND FILE ────────────────────────────────────────────────────────────────
             async function sendFile() {
                 const fileInput = document.getElementById("file-input");
+
                 if (!fileInput.files[0]) return;
+
                 if (!currentTarget || currentTarget.type !== "peer") {
                     alert("Chỉ gửi file trong chat riêng!");
                     fileInput.value = "";
                     return;
                 }
+
                 const file = fileInput.files[0];
                 const histKey = currentTarget.histKey;
-                pushMsg(histKey, { txt: "📎 Đang gửi: " + file.name + "...", mine: true, type: "system" });
+
+                pushMsg(histKey, {
+                    txt: "📎 Đang gửi: " + file.name + "...",
+                    mine: true,
+                    type: "system",
+                });
+
                 renderMessages();
 
                 const fd = new FormData();
                 fd.append("file", file);
+
                 try {
                     const res = await fetch(`/api/sendfile?target=${encodeURIComponent(currentTarget.addr)}`, {
                         method: "POST",
                         body: fd,
                     });
+
                     const msgs = chatStorage[histKey];
                     if (msgs && msgs.length > 0) msgs.pop();
+
                     pushMsg(
                         histKey,
                         res.ok
-                            ? { txt: "📎 Đã gửi file: " + file.name, mine: true, type: "file" }
-                            : { txt: "⚠️ Gửi file thất bại.", type: "error" },
+                            ? {
+                                  txt: "📎 Đã gửi file: " + file.name,
+                                  mine: true,
+                                  type: "file",
+                              }
+                            : {
+                                  txt: "⚠️ Gửi file thất bại.",
+                                  type: "error",
+                              },
                     );
                 } catch (e) {
-                    pushMsg(histKey, { txt: "⚠️ Lỗi kết nối khi gửi file.", type: "error" });
+                    pushMsg(histKey, {
+                        txt: "⚠️ Lỗi kết nối khi gửi file.",
+                        type: "error",
+                    });
                 }
+
                 fileInput.value = "";
                 renderMessages();
             }
 
-            // ─── GROUP ────────────────────────────────────────────────────────────────────
             function switchTab(tab) {
                 document
                     .querySelectorAll(".tab-btn")
                     .forEach((b, i) =>
                         b.classList.toggle("active", (tab === "peers" && i === 0) || (tab === "groups" && i === 1)),
                     );
+
                 document.getElementById("peer-list").style.display = tab === "peers" ? "" : "none";
                 document.getElementById("group-list").style.display = tab === "groups" ? "" : "none";
             }
 
             function openGroupModal() {
                 const checkboxes = document.getElementById("peer-checkboxes");
-                const myAddrLower = myAddr.toLowerCase();
+
                 checkboxes.innerHTML =
                     (peers || [])
                         .filter((p) => {
                             if (!p.includes("-")) return false;
-                            return p.substring(p.lastIndexOf("-") + 1).toLowerCase() !== myAddrLower;
+
+                            const dash = p.lastIndexOf("-");
+                            const name = p.substring(0, dash);
+                            const addr = p.substring(dash + 1);
+
+                            return name !== myName && addr !== "OFFLINE";
                         })
                         .map((p) => {
                             const dash = p.lastIndexOf("-");
                             const name = p.substring(0, dash);
                             const addr = p.substring(dash + 1);
-                            return `<label class="check-peer">
-            <input type="checkbox" value="${addr}" data-name="${name}">
-            ${name} <span style="color:#aaa;font-size:11px">${addr}</span>
-        </label>`;
+
+                            return `
+                <label class="check-peer">
+                  <input type="checkbox" value="${name}" data-addr="${addr}" />
+                  ${name}
+                  <span style="color:#aaa;font-size:11px">${addr}</span>
+                </label>
+              `;
                         })
                         .join("") || '<div style="color:#aaa;font-size:13px">Không có peer online</div>';
+
                 document.getElementById("group-modal").classList.add("show");
             }
 
@@ -599,61 +801,72 @@
                 document.getElementById("group-modal").classList.remove("show");
             }
 
-            function createGroup() {
+            async function createGroup() {
                 const name = document.getElementById("group-name-input").value.trim();
+
                 if (!name) return alert("Nhập tên nhóm!");
+
                 const checked = [...document.querySelectorAll("#peer-checkboxes input:checked")];
+
                 if (checked.length === 0) return alert("Chọn ít nhất 1 người!");
+
                 const members = checked.map((c) => c.value);
-                members.push(myAddr);
-                const group = { id: Date.now().toString(), name, members };
-                groups.push(group);
-                localStorage.setItem("p2p_groups", JSON.stringify(groups));
-                fetch(
-                    `/api/creategroup?groupId=${encodeURIComponent(group.id)}&groupName=${encodeURIComponent(name)}&members=${encodeURIComponent(members.join(","))}`,
+
+                const groupId = Date.now().toString();
+
+                await fetch(
+                    `/api/creategroup?groupId=${encodeURIComponent(groupId)}&groupName=${encodeURIComponent(name)}&members=${encodeURIComponent(members.join(","))}`,
                     { method: "POST" },
                 );
+
                 closeGroupModal();
                 document.getElementById("group-name-input").value = "";
+
+                await loadGroups();
                 renderPeerList();
-                selectGroup(group.id, name, "group:" + group.id);
+                await selectGroup(groupId, name, "group:" + groupId);
             }
 
             async function deleteGroup(groupId, groupName) {
                 if (!confirm(`Xóa nhóm "${groupName}"?\nTất cả thành viên sẽ bị xóa khỏi nhóm.`)) return;
-                const g = groups.find((x) => x.id === groupId);
-                const membersStr = g ? g.members.join(",") : "";
+
+                const members = await loadGroupMembers(groupId);
+
                 await fetch(
-                    `/api/deletegroup?groupId=${encodeURIComponent(groupId)}&groupName=${encodeURIComponent(groupName)}&members=${encodeURIComponent(membersStr)}`,
+                    `/api/deletegroup?groupId=${encodeURIComponent(groupId)}&groupName=${encodeURIComponent(groupName)}&members=${encodeURIComponent(members.join(","))}`,
                     { method: "POST" },
                 );
+
                 groups = groups.filter((x) => x.id !== groupId);
-                localStorage.setItem("p2p_groups", JSON.stringify(groups));
-                delete chatStorage["group:" + groupId];
+
                 if (currentTarget && currentTarget.groupId === groupId) {
                     currentTarget = null;
                     document.getElementById("empty-state").style.display = "flex";
                     document.getElementById("chat-main").style.display = "none";
                 }
+
                 renderPeerList();
             }
 
-            // ─── TOAST ────────────────────────────────────────────────────────────────────
             function showToast(msg, bg = "#0084ff") {
                 const el = document.createElement("div");
+
                 el.style.cssText =
                     `position:fixed;bottom:20px;right:20px;background:${bg};color:#fff;` +
                     "padding:12px 20px;border-radius:10px;font-size:14px;z-index:9999;" +
                     "box-shadow:0 4px 12px rgba(0,0,0,.2)";
+
                 el.textContent = msg;
                 document.body.appendChild(el);
+
                 setTimeout(() => el.remove(), 4000);
             }
 
-            // ─── KEYBOARD ─────────────────────────────────────────────────────────────────
             document.addEventListener("keypress", (e) => {
                 if (e.key !== "Enter") return;
+
                 const overlay = document.getElementById("auth-overlay");
+
                 if (overlay && overlay.style.display !== "none") {
                     document.getElementById("tab-login").classList.contains("active") ? doLogin() : doRegister();
                 } else {

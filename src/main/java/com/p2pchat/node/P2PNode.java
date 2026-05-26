@@ -8,7 +8,6 @@ import java.net.*;
 import java.security.*;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.Base64;
 
 public class P2PNode {
     private final String username;
@@ -101,9 +100,8 @@ public class P2PNode {
             } catch (Exception e) {
                 System.err.println("Lỗi lắng nghe: " + e.getMessage());
             }
-        }
-    }).start();
-}
+        }).start();
+    }
     private String decryptMessage(String raw) {
         try {
             if (raw.startsWith("[GROUP_INVITE]|") || raw.startsWith("[GROUP_DELETE]|")) return raw;
@@ -177,8 +175,10 @@ public class P2PNode {
 
     // ===================== GROUP CHAT =====================
     public void sendGroupSelected(String groupId, List<String> memberAddrs, String msg) {
+        // String formatted = "[Group]|" + groupId + "|" + username + "-" + getMyAddr()
+        //         + "|" + encrypt(username + ": " + msg);
         String formatted = "[Group]|" + groupId + "|" + username + "-" + getMyAddr()
-                + "|" + encrypt(username + ": " + msg);
+        + "|" + encrypt(msg);
         String histKey = "group:" + groupId;
         String record  = "ME|" + msg;
         chatHistory.computeIfAbsent(histKey, k -> new CopyOnWriteArrayList<>()).add(record);
